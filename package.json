@@ -19,6 +19,9 @@
     "url": "https://github.com/mdekstrand/run-and-slack/issues"
   },
   "homepage": "https://github.com/mdekstrand/run-and-slack#readme",
+  "bin": {
+    "run-and-slack": "./run-and-slack.js"
+  },
   "jshintConfig": {
     "esversion": 6,
     "node": true
