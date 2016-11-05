@@ -1,9 +1,15 @@
 "use strict";
 
 const cp = require('child_process');
+const fs = require('fs');
 const util = require('util');
-const github = require('github');
+const GHAPI = require('github');
 const chalk = require('chalk');
+const path = require('path');
+
+const github = new GHAPI({
+  protocol: 'https'
+});
 
 var args = process.argv.slice(2);
 
@@ -62,8 +68,15 @@ while (!done && args.length > 0) {
 }
 info('will post to channel %s', options.channel);
 
-if (options.logFile && !process.env.GITHUB_TOKEN) {
-  err(2, 'no GITHUB_TOKEN for uploading log file');
+if (options.logFile) {
+  if (process.env.GITHUB_TOKEN) {
+    github.authenticate({
+      type: 'oauth',
+      token: process.env.GITHUB_TOKEN
+    });
+  } else {
+    err(2, 'no GITHUB_TOKEN for uploading log file');
+  }
 }
 
 let cmd = cp.spawn(args[0], args.slice(1), {
@@ -75,6 +88,47 @@ cmd.on('error', (e) => {
 });
 cmd.on('close', (code) =>{
   info('exited with code %d', code);
+  if (options.logFile) {
+    fs.stat(options.logFile, (e, stat) => {
+      if (e) {
+        err('no log file found');
+        postResult(code, null);
+      } else if (stat.size < 2 * 1024 * 1024) {
+        info('uploading log file with %d bytes', stat.size);
+        fs.readFile(options.logFile, {encoding: 'utf-8'}, (e, data) => {
+          if (e) {
+            err('cannot read log file');
+            postResult(code, null);
+          } else {
+            var obj = {
+              files: {},
+              public: false
+            };
+            obj.files[path.basename(options.logFile)] = {
+              content: data
+            };
+            github.gists.create(obj, (e, res) => {
+              var url = null;
+              if (e) {
+                err('cannot post to Gist: %s', e);
+              } else {
+                url = res.html_url;
+              }
+              postResult(code, url);
+            });
+          }
+        });
+      } else {
+        info('log file too large (%d bytes)', stat.size);
+        postResult(code, stat.size);
+      }
+    });
+  } else {
+    postResult(code);
+  } 
+});
+
+function postResult(code, logUrl) {
   var icon, msg;
   var alert = '';
   if (options.alertUser) {
@@ -87,12 +141,19 @@ cmd.on('close', (code) =>{
     icon = ':tada:';
     msg = 'completed successfully';
   }
+  msg = util.format('%s%s command %s %s\n```\n%s\n```', 
+                    icon, alert, args[0], msg,
+                    args.join(' '));
+  if (typeof logUrl === 'string') {
+    msg += '\nLog file: <' + logUrl + '>';
+  } else if (typeof logUrl === 'number') {
+    msg += util.format('\n_Log file too large (%d bytes)_', logUrl);
+  }
+  info('posting to Slack');
   slack.send({
     channel: options.channel,
     icon_emoji: options.emoji,
     username: options.username,
-    text: util.format('%s%s command %s %s\n```\n%s\n```', 
-                      icon, alert, args[0], msg,
-                      args.join(' '))
+    text: msg
   });
-});
+}
